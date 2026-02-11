@@ -1,95 +1,119 @@
 # Shelly Prometheus Exporter
 
-Shelly Prometheus Exporter is a Go-based application that collects metrics from Shelly devices via their REST API endpoints and exposes them in Prometheus-compatible format. This tool enables detailed monitoring and visualization of your Shelly devices in Prometheus and Grafana.
+> Fork of [Supporterino/shelly_exporter](https://github.com/Supporterino/shelly_exporter) with dynamic component discovery.
+
+Shelly Prometheus Exporter is a Go-based application that collects metrics from Shelly devices via their RPC API and exposes them in Prometheus-compatible format.
+
+## Fork Changes
+
+The upstream exporter hard-codes supported device types (`PlusPlugS`, `Plus2PM`, `Mini1G3`), meaning any other Shelly device (e.g. `PlusPlugUK`, `PlugSG3`, Gen4 devices) silently produces no switch/cover metrics.
+
+This fork replaces the device-type switch statement with **dynamic component discovery**: on registration, the exporter parses the keys from `Shelly.GetStatus` (e.g. `switch:0`, `cover:0`) to determine which components a device has. This means **all Gen2, Gen3, and Gen4 devices work automatically** without code changes per device type.
+
+### Changes from upstream
+
+- **Dynamic component discovery** (`client/api_client.go`) - parses `Shelly.GetStatus` response keys to find `switch:N` and `cover:N` components
+- **Generic metrics collection** (`rpc/main.go`) - iterates over discovered components instead of matching device types; WiFi metrics always collected
+- **Dockerfile** - removed bundled `config.yaml`, clean entrypoint accepting `--config` flag
+- **CI workflows** - use `GITHUB_TOKEN` instead of custom `TOKEN` secret
 
 ## Usage
 
-Shelly Prometheus Exporter can be deployed in three different ways:
+### Docker
 
-1. **Standalone Binary**
-   - Download the latest standalone binary from the [GitHub Releases](https://github.com/supporterino/shelly_exporter/releases).
-   - Ensure you have a `config.yaml` file configured with the necessary options. You can refer to the example provided in the repository.
-   - Run the binary:
-     ```bash
-     ./shelly_exporter -config config.yaml
-     ```
-
-2. **Docker Image**
-   - Use the Docker image available at `ghcr.io/supporterino/shelly_exporter`.
-   - Ensure you have a `config.yaml` file configured with the necessary options.
-   - Run the Docker container:
-     ```bash
-     docker run -v /path/to/config.yaml:/config.yaml -p 8080:8080 ghcr.io/supporterino/shelly_exporter
-     ```
-
-3. **Helm Chart**
-   - Deploy using the Helm chart available at [https://supporterino.github.io/shelly_exporter](https://supporterino.github.io/shelly_exporter) with the chart name `shelly-exporter`.
-   - Customize the configuration through the chart's `values.yaml`.
-   - Install the chart:
-     ```bash
-     helm repo add supporterino https://supporterino.github.io/shelly_exporter
-     helm install my-shelly-exporter supporterino/shelly-exporter -f values.yaml
-     ```
+```bash
+docker run -v /path/to/config.yaml:/config/config.yaml -p 8080:8080 \
+  ghcr.io/lukeevanstech/shelly_exporter --config /config/config.yaml
+```
 
 ### Configuration
 
-- **Standalone Binary and Docker Image**: Requires a `config.yaml` file that defines the necessary settings. Refer to the example in the repository for configuration options.
-- **Helm Chart**: Configuration is managed through the `values.yaml` file, allowing fine-tuned customization of the deployment.
+```yaml
+listenAddress: :8080
+debug: false
+deviceUpdateInterval: 30
+devices:
+  - host: 192.168.1.100
+  - host: 192.168.1.101
+    password: mypassword
+```
+
+| Field | Description | Default |
+|---|---|---|
+| `listenAddress` | Address and port to listen on | `:8080` |
+| `debug` | Enable debug logging | `false` |
+| `deviceUpdateInterval` | Seconds between device polls | `30` |
+| `devices[].host` | Device IP address | (required) |
+| `devices[].username` | Auth username (if enabled) | (empty) |
+| `devices[].password` | Auth password (if enabled) | (empty) |
+
+### Endpoints
+
+| Path | Description |
+|---|---|
+| `/metrics` | Prometheus metrics |
+| `/health` | Health check |
 
 ## Metrics
 
-The exporter fetches metrics from various RPC calls in the Shelly API. Below are the exposed metrics. Contributions for additional metrics are welcome.
+### Switch Metrics (`switch:N` components)
 
-### Shelly.GetConfig
+| Metric | Labels | Description |
+|---|---|---|
+| `shelly_switch_state` | `device_mac`, `switch_id` | Switch output state (1=on, 0=off) |
+| `shelly_switch_power` | `device_mac`, `switch_id` | Active power in watts |
+| `shelly_switch_voltage` | `device_mac`, `switch_id` | Voltage in volts |
+| `shelly_switch_current` | `device_mac`, `switch_id` | Current in amps |
+| `shelly_switch_frequency` | `device_mac`, `switch_id` | Input frequency in Hz |
+| `shelly_switch_energy` | `device_mac`, `switch_id` | Total energy consumption in Wh |
+| `shelly_switch_temperature` | `device_mac`, `switch_id`, `temperature_unit` | Device temperature (dC/dF) |
+| `shelly_switch_power_limit` | `device_mac`, `switch_id` | Configured power limit in watts |
+| `shelly_switch_current_limit` | `device_mac`, `switch_id` | Configured current limit in amps |
+| `shelly_switch_voltage_limit` | `device_mac`, `switch_id`, `kind` | Voltage limits (overvoltage/undervoltage) |
+| `shelly_switch_initial_state` | `device_mac`, `switch_id` | Initial state on boot |
+| `shelly_switch_auto_on` | `device_mac`, `switch_id`, `delay` | Auto-on enabled |
+| `shelly_switch_auto_off` | `device_mac`, `switch_id`, `delay` | Auto-off enabled |
 
-| Metric Name                     | Labels                              | Example                                                                 | Explanation                                                            |
-|---------------------------------|-------------------------------------|-------------------------------------------------------------------------|------------------------------------------------------------------------|
-| `ble_enabled`                   | `device_mac`                       | `ble_enabled{device_mac="AA:BB:CC:DD:EE:FF"} 1`                        | Indicates if BLE is enabled (1 for true, 0 for false).                |
-| `cloud_enabled`                 | `device_mac`                       | `cloud_enabled{device_mac="AA:BB:CC:DD:EE:FF"} 0`                      | Indicates if Cloud is enabled (1 for true, 0 for false).              |
-| `cloud_server_info`             | `device_mac`, `server`             | `cloud_server_info{device_mac="AA:BB:CC:DD:EE:FF", server="example.com"} 1` | Provides cloud server configuration (e.g., server address).           |
-| `eth_enabled`                   | `device_mac`                       | `eth_enabled{device_mac="AA:BB:CC:DD:EE:FF"} 1`                        | Indicates if Ethernet is enabled (1 for true, 0 for false).           |
-| `eth_ipv4_mode`                 | `device_mac`, `mode`               | `eth_ipv4_mode{device_mac="AA:BB:CC:DD:EE:FF", mode="dhcp"} 1`         | Reports the IPv4 mode of Ethernet (e.g., `dhcp`, `static`).           |
-| `input_inverted`                | `device_mac`, `input_id`, `type`   | `input_inverted{device_mac="AA:BB:CC:DD:EE:FF", input_id="1", type="digital"} 1` | Shows the state of inputs, including type and ID.                     |
-| `switch_auto_on`                | `device_mac`, `switch_id`          | `switch_auto_on{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 1`      | Indicates if the automatic on feature is enabled for a switch.        |
-| `switch_auto_on_delay`          | `device_mac`, `switch_id`          | `switch_auto_on_delay{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 30` | Reports the delay (in seconds) before the switch auto-on feature activates. |
-| `switch_auto_off_delay`         | `device_mac`, `switch_id`          | `switch_auto_off_delay{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 60` | Reports the delay (in seconds) before the switch auto-off feature activates. |
-| `switch_power_limit`            | `device_mac`, `switch_id`          | `switch_power_limit{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 100` | Specifies the power limit (in watts) for a switch.                    |
-| `wifi_ap_enabled`               | `device_mac`                       | `wifi_ap_enabled{device_mac="AA:BB:CC:DD:EE:FF"} 1`                    | Indicates if the Wi-Fi Access Point (AP) is enabled (1 for true, 0 for false). |
-| `wifi_sta_enabled`              | `device_mac`                       | `wifi_sta_enabled{device_mac="AA:BB:CC:DD:EE:FF"} 0`                   | Indicates if the Wi-Fi Station (STA) mode is enabled (1 for true, 0 for false). |
-| `wifi_roaming_rssi_threshold`   | `device_mac`                       | `wifi_roaming_rssi_threshold{device_mac="AA:BB:CC:DD:EE:FF"} -75`      | Reports the RSSI threshold for triggering Wi-Fi roaming.              |
+### Cover Metrics (`cover:N` components)
 
-### Shelly.GetStatus
+| Metric | Labels | Description |
+|---|---|---|
+| `shelly_cover_state` | `device_mac`, `cover_id` | Cover state (1=open, 0=closed, 2=moving, 3=stopped) |
+| `shelly_cover_power` | `device_mac`, `cover_id` | Active power in watts |
+| `shelly_cover_voltage` | `device_mac`, `cover_id` | Voltage in volts |
+| `shelly_cover_current` | `device_mac`, `cover_id` | Current in amps |
+| `shelly_cover_powerfactor` | `device_mac`, `cover_id` | Power factor |
+| `shelly_cover_frequency` | `device_mac`, `cover_id` | Input frequency in Hz |
+| `shelly_cover_energy` | `device_mac`, `cover_id` | Total energy consumption in Wh |
+| `shelly_cover_temperature` | `device_mac`, `cover_id`, `temperature_unit` | Device temperature (dC/dF) |
+| `shelly_cover_position` | `device_mac`, `cover_id` | Current position (0-100) |
+| `shelly_cover_pos_control` | `device_mac`, `cover_id` | Position control available |
 
-| Metric Name             | Labels                                    | Example                                                                                       | Explanation                                                           |
-|-------------------------|-------------------------------------------|-----------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
-| `input_state`           | `device_mac`, `input_id`                 | `input_state{device_mac="AA:BB:CC:DD:EE:FF", input_id="1"} 1`                                 | Indicates the state of a specific input (e.g., on/off).               |
-| `switch_state`          | `device_mac`, `switch_id`                | `switch_state{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 1`                               | Indicates the state of a switch (e.g., on/off).                       |
-| `switch_apower`         | `device_mac`, `switch_id`                | `switch_apower{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 150`                            | Apparent power of the switch in watts.                                |
-| `switch_voltage`        | `device_mac`, `switch_id`                | `switch_voltage{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 230`                           | Voltage level of the switch in volts.                                 |
-| `switch_current`        | `device_mac`, `switch_id`                | `switch_current{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 0.65`                          | Current drawn by the switch in amperes.                               |
-| `switch_energy`         | `device_mac`, `switch_id`                | `switch_energy{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 12.5`                           | Energy consumption of the switch in kilowatt-hours.                   |
-| `switch_temperature`    | `device_mac`, `switch_id`                | `switch_temperature{device_mac="AA:BB:CC:DD:EE:FF", switch_id="1"} 45`                        | Temperature of the switch in degrees Celsius.                         |
-| `system_uptime`         | `device_mac`                             | `system_uptime{device_mac="AA:BB:CC:DD:EE:FF"} 3600`                                          | System uptime in seconds.                                             |
-| `system_ram_free`       | `device_mac`                             | `system_ram_free{device_mac="AA:BB:CC:DD:EE:FF"} 1048576`                                     | Amount of free RAM in bytes.                                          |
-| `system_ram_size`       | `device_mac`                             | `system_ram_size{device_mac="AA:BB:CC:DD:EE:FF"} 2097152`                                     | Total RAM size in bytes.                                              |
-| `system_fs_free`        | `device_mac`                             | `system_fs_free{device_mac="AA:BB:CC:DD:EE:FF"} 524288`                                       | Amount of free filesystem space in bytes.                             |
-| `system_fs_size`        | `device_mac`                             | `system_fs_size{device_mac="AA:BB:CC:DD:EE:FF"} 1048576`                                      | Total filesystem size in bytes.                                       |
-| `wifi_rssi`             | `device_mac`, `ssid`, `sta_ip`           | `wifi_rssi{device_mac="AA:BB:CC:DD:EE:FF", ssid="MySSID", sta_ip="192.168.1.2"} -65`          | Wi-Fi RSSI signal strength in dBm.                                    |
-| `update_available`      | `device_mac`, `version`                  | `update_available{device_mac="AA:BB:CC:DD:EE:FF", version="1.0.0"} 1`                         | Indicates if a firmware update is available (1 for yes, 0 for no).    |
+### System Metrics
 
-### Shelly.GetDeviceInfo
+| Metric | Labels | Description |
+|---|---|---|
+| `shelly_device_info` | `device_name`, `device_id`, `device_mac`, `model`, `fw_version`, `app` | Static device information |
+| `shelly_device_auth` | `device_mac` | Authentication enabled |
+| `shelly_device_ble` | `device_mac` | BLE enabled |
+| `shelly_device_cloud` | `device_mac` | Cloud enabled |
+| `shelly_device_eth` | `device_mac` | Ethernet enabled |
+| `shelly_device_wifi_sta` | `device_mac` | WiFi station enabled |
+| `shelly_device_wifi_ap` | `device_mac` | WiFi AP enabled |
+| `shelly_system_uptime` | `device_mac` | System uptime in seconds |
+| `shelly_system_ram` | `device_mac`, `kind` | RAM free/max in bytes |
+| `shelly_system_fs` | `device_mac`, `kind` | Filesystem free/max in bytes |
+| `shelly_system_wifi_rssi` | `device_mac`, `ssid`, `sta_ip` | WiFi signal strength in dBm |
 
-| Metric Name      | Labels                                                      | Example                                                                                                                   | Explanation                                                      |
-|------------------|-------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------|
-| `device_info`    | `device_name`, `device_id`, `device_mac`, `model`, `fw_version`, `app` | `device_info{device_name="Device1", device_id="12345", device_mac="AA:BB:CC:DD:EE:FF", model="Shelly1", fw_version="1.2.3", app="shelly"} 1` | Exposes static device information as labels such as model, firmware version, and application. |
-| `auth_enabled`   | `device_mac`                                                | `auth_enabled{device_mac="AA:BB:CC:DD:EE:FF"} 1`                                                                           | Indicates whether authentication is enabled on the device (1 for true, 0 for false).           |
+## Tested Devices
 
-## Contributing
-
-We welcome contributions to this project! Feel free to:
-
-* Open issues for bug reports or feature requests.
-* Submit pull requests with enhancements or fixes.
+| Device | App Type | Status |
+|---|---|---|
+| Shelly Plus Plug UK | `PlusPlugUK` | Verified |
+| Shelly Plus Plug S | `PlusPlugS` | Supported (upstream) |
+| Shelly Plus 2PM | `Plus2PM` | Supported (upstream) |
+| Shelly 1 Mini Gen3 | `Mini1G3` | Supported (upstream) |
+| All other Gen2/Gen3/Gen4 with switch or cover components | Any | Should work via dynamic discovery |
 
 ## License
 
