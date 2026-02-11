@@ -51,6 +51,14 @@ func (dm *DeviceManager) RegisterDevice(device *DeviceConfig, updateInterval tim
 	device.Mac = ShellyGetDeviceInfo.GetDeviceMac()
 	device.Profile = ShellyGetDeviceInfo.GetDeviceProfile()
 
+	// Discover available components from Shelly.GetStatus keys
+	switchIDs, coverIDs, err := apiClient.DiscoverComponents()
+	if err != nil {
+		slog.Error("Failed to discover components", slog.Any("error", err), slog.String("host", device.Host))
+	}
+	device.SwitchIDs = switchIDs
+	device.CoverIDs = coverIDs
+
 	// Save the cancel function to stop the goroutine later.
 	dm.devices[device.Host] = cancel
 
@@ -125,46 +133,23 @@ func fetchAndUpdateMetrics(apiClient *client.APIClient, device *DeviceConfig) er
 
 	slog.Debug("Device type:", slog.String("type", device.Type))
 
-	switch device_type := device.Type; device_type {
-	case "Plus2PM":
-		slog.Debug("Device profile:", slog.String("profile", device.Profile))
-		switch profile := device.Profile; profile {
-		case "cover":
-			err := CoverGetStatus.UpdateCoverGetStatusMetrics(apiClient, 0, device.Mac)
-			if err != nil {
-				return fmt.Errorf("failed to update cover metrics: %w", err)
-			}
-			err = WiFiGetStatus.UpdateWiFiGetStatusMetrics(apiClient, device.Mac)
-			if err != nil {
-				return fmt.Errorf("failed to update wifi metrics: %w", err)
-			}
+	for _, switchID := range device.SwitchIDs {
+		if err := SwitchGetStatus.UpdateSwitchGetStatusMetrics(apiClient, switchID, device.Mac); err != nil {
+			return fmt.Errorf("failed to update switch %d status metrics: %w", switchID, err)
 		}
-	case "PlusPlugS":
-		err := SwitchGetStatus.UpdateSwitchGetStatusMetrics(apiClient, 0, device.Mac)
-		if err != nil {
-			return fmt.Errorf("failed to update switch status metrics: %w", err)
+		if err := SwitchGetConfig.UpdateSwitchGetConfigMetrics(apiClient, switchID, device.Mac); err != nil {
+			return fmt.Errorf("failed to update switch %d config metrics: %w", switchID, err)
 		}
-		err = SwitchGetConfig.UpdateSwitchGetConfigMetrics(apiClient, 0, device.Mac)
-		if err != nil {
-			return fmt.Errorf("failed to update switch conig metrics: %w", err)
+	}
+
+	for _, coverID := range device.CoverIDs {
+		if err := CoverGetStatus.UpdateCoverGetStatusMetrics(apiClient, coverID, device.Mac); err != nil {
+			return fmt.Errorf("failed to update cover %d metrics: %w", coverID, err)
 		}
-		err = WiFiGetStatus.UpdateWiFiGetStatusMetrics(apiClient, device.Mac)
-		if err != nil {
-			return fmt.Errorf("failed to update wifi metrics: %w", err)
-		}
-	case "Mini1G3":
-		err := SwitchGetStatus.UpdateSwitchGetStatusMetrics(apiClient, 0, device.Mac)
-		if err != nil {
-			return fmt.Errorf("failed to update switch status metrics: %w", err)
-		}
-		err = SwitchGetConfig.UpdateSwitchGetConfigMetrics(apiClient, 0, device.Mac)
-		if err != nil {
-			return fmt.Errorf("failed to update switch conig metrics: %w", err)
-		}
-		err = WiFiGetStatus.UpdateWiFiGetStatusMetrics(apiClient, device.Mac)
-		if err != nil {
-			return fmt.Errorf("failed to update wifi metrics: %w", err)
-		}
+	}
+
+	if err := WiFiGetStatus.UpdateWiFiGetStatusMetrics(apiClient, device.Mac); err != nil {
+		return fmt.Errorf("failed to update wifi metrics: %w", err)
 	}
 
 	slog.Info("Successfully updated metrics")

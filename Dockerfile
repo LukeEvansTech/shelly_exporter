@@ -11,7 +11,6 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o shelly_exporter ./cmd/exporter
 
 FROM scratch
 
-COPY config.yaml /
 COPY --from=build /app/shelly_exporter .
 
-ENTRYPOINT ["/shelly_exporter", "-config", "config.yaml"]
+ENTRYPOINT ["/shelly_exporter"]

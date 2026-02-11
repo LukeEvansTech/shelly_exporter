@@ -6,6 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
 	"time"
 )
 
@@ -58,4 +61,37 @@ func (c *APIClient) FetchData(endpoint string, result interface{}) error {
 
 	slog.Info("Successfully fetched data", slog.String("url", url))
 	return nil
+}
+
+var componentKeyRe = regexp.MustCompile(`^(switch|cover):(\d+)$`)
+
+// DiscoverComponents fetches Shelly.GetStatus and returns the IDs of
+// switch and cover components found in the response keys.
+func (c *APIClient) DiscoverComponents() (switchIDs []int, coverIDs []int, err error) {
+	var raw map[string]json.RawMessage
+	if err := c.FetchData("/rpc/Shelly.GetStatus", &raw); err != nil {
+		return nil, nil, fmt.Errorf("failed to discover components: %w", err)
+	}
+
+	for key := range raw {
+		m := componentKeyRe.FindStringSubmatch(key)
+		if m == nil {
+			continue
+		}
+		id, _ := strconv.Atoi(m[2])
+		switch m[1] {
+		case "switch":
+			switchIDs = append(switchIDs, id)
+		case "cover":
+			coverIDs = append(coverIDs, id)
+		}
+	}
+
+	sort.Ints(switchIDs)
+	sort.Ints(coverIDs)
+
+	slog.Info("Discovered components",
+		slog.Any("switchIDs", switchIDs),
+		slog.Any("coverIDs", coverIDs))
+	return switchIDs, coverIDs, nil
 }
