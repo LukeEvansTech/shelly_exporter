@@ -46,7 +46,11 @@ func (dm *DeviceManager) RegisterDevice(device *DeviceConfig, updateInterval tim
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Initialize device type
-	ShellyGetDeviceInfo.UpdateShellyGetDeviceInfoMetrics(apiClient)
+	if err := ShellyGetDeviceInfo.UpdateShellyGetDeviceInfoMetrics(apiClient); err != nil {
+		slog.Error("Failed to register device (unreachable)", slog.Any("error", err), slog.String("host", device.Host))
+		cancel()
+		return
+	}
 	device.Type = ShellyGetDeviceInfo.GetDeviceType()
 	device.Mac = ShellyGetDeviceInfo.GetDeviceMac()
 	device.Profile = ShellyGetDeviceInfo.GetDeviceProfile()
@@ -55,6 +59,8 @@ func (dm *DeviceManager) RegisterDevice(device *DeviceConfig, updateInterval tim
 	switchIDs, coverIDs, err := apiClient.DiscoverComponents()
 	if err != nil {
 		slog.Error("Failed to discover components", slog.Any("error", err), slog.String("host", device.Host))
+		cancel()
+		return
 	}
 	device.SwitchIDs = switchIDs
 	device.CoverIDs = coverIDs
